@@ -16,12 +16,16 @@ export function setUndoRedoListener(fn: UndoRedoListener | null) { undoRedoListe
 function notifyUndoRedo(msg: string) { undoRedoListener?.(msg); }
 
 // API calls use Vite proxy (empty string = same origin → port 5173).
-// Asset uploads go directly to the Node server to avoid Vite proxy issues
-// with large multipart/form-data POST bodies and binary chunk uploads.
-// The backend URL is configurable via VITE_BACKEND_URL env var.
-// When empty, uploads go through the same origin (Vite proxy → backend:3333).
+// Asset uploads go directly to the FFmpeg server on port 3333 to avoid Vite
+// proxy issues with large multipart/form-data POST bodies and binary chunks.
+// Uses the page's hostname so it works both locally and on remote servers.
 export const LOCAL_FFMPEG_URL = '';
-export const DIRECT_UPLOAD_URL: string = import.meta.env.VITE_BACKEND_URL ? String(import.meta.env.VITE_BACKEND_URL) : '';
+export function getDirectUploadUrl(): string {
+  const configured = import.meta.env.VITE_BACKEND_URL;
+  if (configured && String(configured).length > 0) return String(configured);
+  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+  return `http://${host}:3333`;
+}
 export const FFMPEG_SERVER_PORT = 3333;
 const SESSION_STORAGE_KEY = 'clipwise-session';
 
@@ -432,7 +436,7 @@ export function useProject() {
       xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
       xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
 
-      xhr.open('POST', `${DIRECT_UPLOAD_URL}/session/${sessionId}/assets`);
+      xhr.open('POST', `${getDirectUploadUrl()}/session/${sessionId}/assets`);
       xhr.timeout = 600000; // 10 min timeout
       xhr.send(formData);
     });
@@ -448,7 +452,7 @@ export function useProject() {
       catch { throw new Error(`Unexpected server response (${response.status})`); }
     };
 
-    const uploadBase = DIRECT_UPLOAD_URL;
+    const uploadBase = getDirectUploadUrl();
 
     // Initialize chunked upload
     const initResponse = await fetch(`${uploadBase}/session/${sessionId}/uploads/init`, {
