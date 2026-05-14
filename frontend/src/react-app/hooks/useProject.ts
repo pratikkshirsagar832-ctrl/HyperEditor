@@ -15,17 +15,10 @@ let undoRedoListener: UndoRedoListener | null = null;
 export function setUndoRedoListener(fn: UndoRedoListener | null) { undoRedoListener = fn; }
 function notifyUndoRedo(msg: string) { undoRedoListener?.(msg); }
 
-// API calls use Vite proxy (empty string = same origin → port 5173).
-// Asset uploads go directly to the FFmpeg server on port 3333 to avoid Vite
-// proxy issues with large multipart/form-data POST bodies and binary chunks.
-// Uses the page's hostname so it works both locally and on remote servers.
+// All API calls and uploads go through the Vite proxy (same origin = port 5173).
+// The Vite dev/preview server proxies /session/*, /assets/*, /health → backend:3333.
+// This avoids CORS issues entirely since everything is same-origin.
 export const LOCAL_FFMPEG_URL = '';
-export function getDirectUploadUrl(): string {
-  const configured = import.meta.env.VITE_BACKEND_URL;
-  if (configured && String(configured).length > 0) return String(configured);
-  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  return `http://${host}:3333`;
-}
 export const FFMPEG_SERVER_PORT = 3333;
 const SESSION_STORAGE_KEY = 'clipwise-session';
 
@@ -436,7 +429,7 @@ export function useProject() {
       xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
       xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
 
-      xhr.open('POST', `${getDirectUploadUrl()}/session/${sessionId}/assets`);
+      xhr.open('POST', `/session/${sessionId}/assets`);
       xhr.timeout = 600000; // 10 min timeout
       xhr.send(formData);
     });
@@ -452,10 +445,8 @@ export function useProject() {
       catch { throw new Error(`Unexpected server response (${response.status})`); }
     };
 
-    const uploadBase = getDirectUploadUrl();
-
-    // Initialize chunked upload
-    const initResponse = await fetch(`${uploadBase}/session/${sessionId}/uploads/init`, {
+    // Initialize chunked upload (relative URL → same origin → Vite proxy → backend)
+    const initResponse = await fetch(`/session/${sessionId}/uploads/init`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename: file.name, size: file.size }),
@@ -477,7 +468,7 @@ export function useProject() {
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const chunkResponse = await fetch(
-            `${uploadBase}/session/${sessionId}/uploads/chunk?uploadId=${encodeURIComponent(initResult.uploadId)}`,
+            `/session/${sessionId}/uploads/chunk?uploadId=${encodeURIComponent(initResult.uploadId)}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/octet-stream' },
@@ -511,7 +502,7 @@ export function useProject() {
     let completeResult;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const completeResponse = await fetch(`${uploadBase}/session/${sessionId}/uploads/complete`, {
+        const completeResponse = await fetch(`/session/${sessionId}/uploads/complete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ uploadId: initResult.uploadId }),
