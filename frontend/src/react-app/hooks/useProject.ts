@@ -15,10 +15,11 @@ let undoRedoListener: UndoRedoListener | null = null;
 export function setUndoRedoListener(fn: UndoRedoListener | null) { undoRedoListener = fn; }
 function notifyUndoRedo(msg: string) { undoRedoListener?.(msg); }
 
-// All API calls and uploads go through the Vite proxy (same origin = port 5173).
-// The Vite dev/preview server proxies /session/*, /assets/*, /health → backend:3333.
-// This avoids CORS issues entirely since everything is same-origin.
-export const LOCAL_FFMPEG_URL = '';
+// Instead of proxying through Vite (which drops large multipart streams in preview mode),
+// we directly hit port 3333 on the same host since the backend is bound to 0.0.0.0.
+export const LOCAL_FFMPEG_URL = typeof window !== 'undefined' && window.location.hostname 
+  ? `${window.location.protocol}//${window.location.hostname}:3333` 
+  : 'http://localhost:3333';
 export const FFMPEG_SERVER_PORT = 3333;
 const SESSION_STORAGE_KEY = 'clipwise-session';
 
@@ -434,7 +435,7 @@ export function useProject() {
           xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
           xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
 
-          xhr.open('POST', `/session/${sessionId}/assets`);
+          xhr.open('POST', `${LOCAL_FFMPEG_URL}/session/${sessionId}/assets`);
           xhr.timeout = 600000; // 10 min timeout
           xhr.send(formData);
         });
@@ -463,8 +464,8 @@ export function useProject() {
       catch { throw new Error(`Unexpected server response (${response.status})`); }
     };
 
-    // Initialize chunked upload (relative URL → same origin → Vite proxy → backend)
-    const initResponse = await fetch(`/session/${sessionId}/uploads/init`, {
+    // Initialize chunked upload (hitting backend directly via LOCAL_FFMPEG_URL)
+    const initResponse = await fetch(`${LOCAL_FFMPEG_URL}/session/${sessionId}/uploads/init`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filename: file.name, size: file.size }),
@@ -486,7 +487,7 @@ export function useProject() {
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const chunkResponse = await fetch(
-            `/session/${sessionId}/uploads/chunk?uploadId=${encodeURIComponent(initResult.uploadId)}`,
+            `${LOCAL_FFMPEG_URL}/session/${sessionId}/uploads/chunk?uploadId=${encodeURIComponent(initResult.uploadId)}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/octet-stream' },
@@ -520,7 +521,7 @@ export function useProject() {
     let completeResult;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const completeResponse = await fetch(`/session/${sessionId}/uploads/complete`, {
+        const completeResponse = await fetch(`${LOCAL_FFMPEG_URL}/session/${sessionId}/uploads/complete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ uploadId: initResult.uploadId }),
