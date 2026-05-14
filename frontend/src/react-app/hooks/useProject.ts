@@ -336,7 +336,7 @@ export function useProject() {
   // Direct cross-origin XHR to localhost:3333 was getting aborted by the browser
   // before any bytes were sent for some large files.
   // Strategy: use simple multipart upload for files <10MB, chunked for larger files.
-  const CHUNK_THRESHOLD = 10 * 1024 * 1024; // 10MB
+  const CHUNK_THRESHOLD = 5 * 1024 * 1024; // 5MB — use chunked upload sooner for reliability
 
   const uploadAsset = useCallback(async (file: File, onProgress?: (percent: number, uploadedMB: number, totalMB: number) => void): Promise<Asset> => {
     uploadingRef.current = true;
@@ -383,57 +383,75 @@ export function useProject() {
     }
   }, [setSession]);
 
-  // Simple multipart upload for files under 10MB
+  // Simple multipart upload for files under threshold
   async function simpleUpload(file: File, sessionId: string, onProgress?: (percent: number, uploadedMB: number, totalMB: number) => void, totalMB?: number): Promise<Asset> {
-    const formData = new FormData();
-    formData.append('file', file, file.name);
+    const maxAttempts = 3;
 
-    const xhr = new XMLHttpRequest();
-    const asset = await new Promise<Asset>((resolve, reject) => {
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          const pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
-          onProgress?.(pct, Math.round(e.loaded / (1024 * 1024) * 10) / 10, totalMB || 1);
-          setStatus(`Uploading ${file.name}... ${pct}%`);
-        }
-      });
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const formData = new FormData();
+        formData.append('file', file, file.name);
 
-      xhr.addEventListener('load', async () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const result = JSON.parse(xhr.responseText);
-            if (!result?.asset) {
-              reject(new Error('Invalid upload response'));
-              return;
+        const asset = await new Promise<Asset>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          
+          xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+              const pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
+              onProgress?.(pct, Math.round(e.loaded / (1024 * 1024) * 10) / 10, totalMB || 1);
+              setStatus(`Uploading ${file.name}... ${pct}%`);
             }
-            const newAsset: Asset = {
-              id: result.asset.id, type: result.asset.type,
-              filename: result.asset.filename, duration: result.asset.duration,
-              size: result.asset.size, width: result.asset.width, height: result.asset.height,
-              thumbnailUrl: result.asset.thumbnailUrl ? `${LOCAL_FFMPEG_URL}${result.asset.thumbnailUrl}` : null,
-            };
-            onProgress?.(100, totalMB || 1, totalMB || 1);
-            setAssets(prev => [...prev, newAsset]);
-            setStatus('');
-            resolve(newAsset);
-          } catch (e) {
-            reject(new Error('Failed to parse upload response'));
-          }
-        } else {
-          let msg = `Upload failed (HTTP ${xhr.status})`;
-          try { const err = JSON.parse(xhr.responseText); if (err.error) msg = err.error; } catch {}
-          reject(new Error(msg));
+          });
+
+          xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                const result = JSON.parse(xhr.responseText);
+                if (!result?.asset) {
+                  reject(new Error('Invalid upload response'));
+                  return;
+                }
+                const newAsset: Asset = {
+                  id: result.asset.id, type: result.asset.type,
+                  filename: result.asset.filename, duration: result.asset.duration,
+                  size: result.asset.size, width: result.asset.width, height: result.asset.height,
+                  thumbnailUrl: result.asset.thumbnailUrl ? `${LOCAL_FFMPEG_URL}${result.asset.thumbnailUrl}` : null,
+                };
+                onProgress?.(100, totalMB || 1, totalMB || 1);
+                setAssets(prev => [...prev, newAsset]);
+                setStatus('');
+                resolve(newAsset);
+              } catch (e) {
+                reject(new Error('Failed to parse upload response'));
+              }
+            } else {
+              let msg = `Upload failed (HTTP ${xhr.status})`;
+              try { const err = JSON.parse(xhr.responseText); if (err.error) msg = err.error; } catch {}
+              reject(new Error(msg));
+            }
+          });
+
+          xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+          xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
+
+          xhr.open('POST', `/session/${sessionId}/assets`);
+          xhr.timeout = 600000; // 10 min timeout
+          xhr.send(formData);
+        });
+
+        return asset;
+      } catch (err) {
+        console.warn(`Upload attempt ${attempt}/${maxAttempts} failed:`, err instanceof Error ? err.message : err);
+        if (attempt === maxAttempts) {
+          throw err instanceof Error ? err : new Error('Network error during upload');
         }
-      });
+        // Wait before retrying (exponential backoff)
+        await new Promise(r => setTimeout(r, 1000 * attempt));
+      }
+    }
 
-      xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
-      xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
-
-      xhr.open('POST', `/session/${sessionId}/assets`);
-      xhr.timeout = 600000; // 10 min timeout
-      xhr.send(formData);
-    });
-    return asset;
+    // Should never reach here, but TypeScript needs it
+    throw new Error('Upload failed after all retries');
   }
 
   // Chunked upload for files >= 10MB

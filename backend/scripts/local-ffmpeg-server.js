@@ -7783,7 +7783,7 @@ async function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`\nLocal FFmpeg server running at http://localhost:${PORT}`);
   console.log(`\n   Session API:`);
   console.log(`   POST /session/upload - Upload video, get sessionId`);
