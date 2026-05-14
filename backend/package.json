@@ -1,0 +1,27 @@
+{
+  "name": "hyperedit-backend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@fal-ai/client": "^1.8.4",
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
+    "@hono/zod-validator": "^0.5.0",
+    "@remotion/bundler": "^4.0.407",
+    "@remotion/renderer": "^4.0.407",
+    "@types/formidable": "^3.4.6",
+    "formdata-node": "^6.0.3",
+    "formidable": "^3.5.4",
+    "hono": "4.7.7",
+    "zod": "^3.24.3"
+  },
+  "scripts": {
+    "start": "node scripts/local-ffmpeg-server.js",
+    "start:prod": "NODE_ENV=production node scripts/local-ffmpeg-server.js",
+    "dev": "node --watch scripts/local-ffmpeg-server.js",
+    "cf-dev": "wrangler dev src/worker/index.ts",
+    "cf-deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types"
+  }
+}

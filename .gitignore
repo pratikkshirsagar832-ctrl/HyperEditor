@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
+.env
+.env.local
+.env.production.local
+.dev.vars
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# Temp
+tmp/
+temp/
+
+# Session data
+/tmp/hyperedit-ffmpeg/
+
+# Config files
+wrangler.json

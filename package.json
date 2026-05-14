@@ -1,0 +1,17 @@
+{
+  "name": "hyperedit",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "frontend": "cd frontend && npm run dev",
+    "backend": "cd backend && npm run start",
+    "backend:dev": "cd backend && npm run dev",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "build": "cd frontend && npm run build",
+    "install:all": "cd frontend && npm install && cd ../backend && npm install",
+    "setup": "npm run install:all"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

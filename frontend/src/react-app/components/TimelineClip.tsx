@@ -1,0 +1,326 @@
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { Film, Image, Music, X, Type, Sparkles } from 'lucide-react';
+import type { TimelineClip as TimelineClipType, Asset } from '@/react-app/hooks/useProject';
+
+interface TimelineClipProps {
+  clip: TimelineClipType;
+  asset: Asset | undefined;
+  pixelsPerSecond: number;
+  isSelected: boolean;
+  trackHeight: number;
+  onClick: () => void;
+  onMove: (newStart: number) => void;
+  onResize: (newInPoint: number, newOutPoint: number, newStart?: number) => void;
+  onDragEnd: () => void;
+  onDelete: () => void;
+  captionPreview?: string;  // For caption clips - first few words
+  isCaption?: boolean;       // Whether this is a caption clip
+  waveformPeaks?: number[];  // Waveform data for audio clips
+}
+
+const getAssetIcon = (type?: Asset['type'] | 'caption') => {
+  switch (type) {
+    case 'video': return Film;
+    case 'image': return Image;
+    case 'audio': return Music;
+    case 'caption': return Type;
+    default: return Film;
+  }
+};
+
+const getClipColor = (type?: Asset['type'] | 'caption') => {
+  switch (type) {
+    case 'video': return 'from-zinc-400 to-zinc-600';
+    case 'image': return 'from-zinc-500 to-zinc-500';
+    case 'audio': return 'from-zinc-500 to-zinc-700';
+    case 'caption': return 'from-zinc-300 to-zinc-500';
+    default: return 'from-gray-500 to-gray-600';
+  }
+};
+
+export default function TimelineClip({
+  clip,
+  asset,
+  pixelsPerSecond,
+  isSelected,
+  trackHeight,
+  onClick,
+  onMove,
+  onResize,
+  onDragEnd,
+  onDelete,
+  captionPreview,
+  isCaption = false,
+  waveformPeaks,
+}: TimelineClipProps) {
+  const [isDragging, setIsDragging] = useState(false);
+  const [isResizingLeft, setIsResizingLeft] = useState(false);
+  const [isResizingRight, setIsResizingRight] = useState(false);
+  const [dragStartX, setDragStartX] = useState(0);
+  const [initialStart, setInitialStart] = useState(0);
+  const [initialInPoint, setInitialInPoint] = useState(0);
+  const [initialOutPoint, setInitialOutPoint] = useState(0);
+
+  const clipRef = useRef<HTMLDivElement>(null);
+  const waveformCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Draw waveform on canvas for audio clips
+  useEffect(() => {
+    const canvas = waveformCanvasRef.current;
+    if (!canvas || !waveformPeaks || waveformPeaks.length === 0) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Match canvas size to clip dimensions
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth * dpr;
+    const h = canvas.clientHeight * dpr;
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const numPeaks = waveformPeaks.length;
+    const centerY = canvas.height / 2;
+    const barWidth = Math.max(1, canvas.width / numPeaks);
+    const maxBarHeight = canvas.height * 0.8;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+
+    for (let i = 0; i < numPeaks; i++) {
+      const peak = waveformPeaks[i] || 0;
+      const barHeight = peak * maxBarHeight;
+      const x = i * barWidth;
+      ctx.fillRect(x, centerY - barHeight / 2, Math.max(barWidth - 1, 1), Math.max(barHeight, 1));
+    }
+  }, [waveformPeaks]);
+
+  const Icon = getAssetIcon(isCaption ? 'caption' : asset?.type);
+  const colorClass = getClipColor(isCaption ? 'caption' : asset?.type);
+
+  const left = clip.start * pixelsPerSecond + 1; // 1px offset for visual gap
+  const width = Math.max(clip.duration * pixelsPerSecond - 2, 30); // -2px for visual gap between clips
+
+  // Handle dragging for moving the clip
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+
+    // Check if clicking on resize handles
+    const rect = clipRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const clickX = e.clientX - rect.left;
+    const handleWidth = 8;
+
+    if (clickX < handleWidth) {
+      // Left resize handle
+      setIsResizingLeft(true);
+      setDragStartX(e.clientX);
+      setInitialInPoint(clip.inPoint);
+      setInitialStart(clip.start);
+    } else if (clickX > rect.width - handleWidth) {
+      // Right resize handle
+      setIsResizingRight(true);
+      setDragStartX(e.clientX);
+      setInitialOutPoint(clip.outPoint);
+    } else {
+      // Main body - dragging
+      setIsDragging(true);
+      setDragStartX(e.clientX);
+      setInitialStart(clip.start);
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+  }, [clip.inPoint, clip.outPoint, clip.start]);
+
+  // Handle mouse move for dragging/resizing
+  useEffect(() => {
+    if (!isDragging && !isResizingLeft && !isResizingRight) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - dragStartX;
+      const deltaTime = deltaX / pixelsPerSecond;
+
+      if (isDragging) {
+        const newStart = Math.max(0, initialStart + deltaTime);
+        onMove(newStart);
+      } else if (isResizingLeft) {
+        // Resize from left - changes inPoint and start
+        const newInPoint = Math.max(0, initialInPoint + deltaTime);
+        const maxInPoint = clip.outPoint - 0.1; // Minimum 0.1s duration
+        const clampedInPoint = Math.min(newInPoint, maxInPoint);
+        const inPointDelta = clampedInPoint - initialInPoint;
+        const newStart = initialStart + inPointDelta;
+        onResize(clampedInPoint, clip.outPoint, Math.max(0, newStart));
+      } else if (isResizingRight) {
+        // Resize from right - changes outPoint
+        const newOutPoint = initialOutPoint + deltaTime;
+        const minOutPoint = clip.inPoint + 0.1; // Minimum 0.1s duration
+        const maxOutPoint = asset?.duration ?? Infinity;
+        const clampedOutPoint = Math.min(Math.max(newOutPoint, minOutPoint), maxOutPoint);
+        onResize(clip.inPoint, clampedOutPoint);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      setIsResizingLeft(false);
+      setIsResizingRight(false);
+      onDragEnd();
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [
+    isDragging,
+    isResizingLeft,
+    isResizingRight,
+    dragStartX,
+    initialStart,
+    initialInPoint,
+    initialOutPoint,
+    pixelsPerSecond,
+    clip.inPoint,
+    clip.outPoint,
+    asset?.duration,
+    onMove,
+    onResize,
+    onDragEnd,
+  ]);
+
+  return (
+    <div
+      ref={clipRef}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      onMouseDown={handleMouseDown}
+      className={`absolute rounded-md bg-gradient-to-r ${colorClass} ${
+        isDragging
+          ? 'opacity-80 scale-105 shadow-xl shadow-black/50 z-30 cursor-grabbing ring-2 ring-[#39FF14]'
+          : isResizingLeft || isResizingRight
+            ? 'cursor-ew-resize z-20 ring-2 ring-[#39FF14]'
+            : isSelected
+              ? 'ring-2 ring-[#39FF14] shadow-[0_0_12px_rgba(57,255,20,0.4)] z-20 cursor-grab'
+              : 'ring-1 ring-zinc-500/50 hover:ring-[#39FF14]/70 z-10 cursor-grab'
+      } transition-all duration-75`}
+      style={{
+        left: `${left}px`,
+        width: `${width}px`,
+        top: '4px',
+        height: `${trackHeight - 8}px`,
+      }}
+    >
+      {/* Waveform canvas for audio clips */}
+      {waveformPeaks && waveformPeaks.length > 0 && (
+        <canvas
+          ref={waveformCanvasRef}
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          style={{ zIndex: 0 }}
+        />
+      )}
+
+      {/* Left edge indicator - neon green line marks cut point */}
+      <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#39FF14] rounded-l-md shadow-[0_0_6px_rgba(57,255,20,0.7)]" />
+
+      {/* Right edge indicator - neon green line marks cut point */}
+      <div className="absolute right-0 top-0 bottom-0 w-1 bg-[#39FF14] rounded-r-md shadow-[0_0_6px_rgba(57,255,20,0.7)]" />
+
+      {/* Left resize handle */}
+      <div
+        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-zinc-400/30 rounded-l-md z-10"
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          setIsResizingLeft(true);
+          setDragStartX(e.clientX);
+          setInitialInPoint(clip.inPoint);
+          setInitialStart(clip.start);
+        }}
+      />
+
+      {/* Clip content */}
+      <div className="flex items-center gap-1.5 px-2 h-full overflow-hidden pointer-events-none">
+        {/* Thumbnail or Icon */}
+        {isCaption ? (
+          <Icon className="w-4 h-4 flex-shrink-0" />
+        ) : asset?.thumbnailUrl && asset.type !== 'audio' ? (
+          <div className="w-6 h-6 flex-shrink-0 rounded overflow-hidden">
+            <img
+              src={asset.thumbnailUrl}
+              alt=""
+              className="w-full h-full object-cover"
+              draggable={false}
+            />
+          </div>
+        ) : (
+          <Icon className="w-4 h-4 flex-shrink-0" />
+        )}
+
+        {/* Name or Caption Preview */}
+        <span className="text-xs font-medium truncate">
+          {isCaption ? (captionPreview || 'Caption') : (asset?.filename || 'Unknown')}
+        </span>
+
+        {/* AI-generated indicator */}
+        {asset?.aiGenerated && (
+          <div
+            className="flex-shrink-0 flex items-center gap-0.5 px-1 py-0.5 bg-zinc-500/40 rounded text-[8px] font-bold"
+            title="AI-generated Remotion animation"
+          >
+            <Sparkles className="w-2.5 h-2.5" />
+            AI
+          </div>
+        )}
+      </div>
+
+      {/* Right resize handle */}
+      <div
+        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-zinc-400/30 rounded-r-md z-10"
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          setIsResizingRight(true);
+          setDragStartX(e.clientX);
+          setInitialOutPoint(clip.outPoint);
+        }}
+      />
+
+      {/* Delete button (shown when selected) */}
+      {isSelected && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-colors z-30"
+          title="Remove from timeline"
+        >
+          <X className="w-3 h-3 text-white" />
+        </button>
+      )}
+
+      {/* Duration indicator (shown when resizing) */}
+      {(isResizingLeft || isResizingRight) && (
+        <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-black/80 rounded text-[10px] whitespace-nowrap">
+          {formatTime(clip.inPoint)} - {formatTime(clip.outPoint)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds % 1) * 10);
+  return `${mins}:${secs.toString().padStart(2, '0')}.${ms}`;
+}
